@@ -1,5 +1,5 @@
 import keymage from "keymage";
-import io from "socket.io-client";
+// import io from "socket.io-client";
 import whiteboard from "./whiteboard";
 import keybinds from "./keybinds";
 import Picker from "vanilla-picker";
@@ -46,45 +46,95 @@ const subdir = getSubDir();
 let signaling_socket;
 
 function main() {
-    signaling_socket = io("", { path: subdir + "/ws-api" }); // Connect even if we are in a subdir behind a reverse proxy
+    // signaling_socket = io("", { path: subdir + "/ws-api" }); // Connect even if we are in a subdir behind a reverse proxy
+    signaling_socket = new WebSocket(`ws://localhost:8080/ws-api`);
 
-    signaling_socket.on("connect", function () {
-        console.log("Websocket connected!");
+    signaling_socket.onopen = function (event) {
+        console.log("Websocket connected!", event);
 
-        signaling_socket.on("whiteboardConfig", (serverResponse) => {
-            ConfigService.initFromServer(serverResponse);
-            // Inti whiteboard only when we have the config from the server
-            initWhiteboard();
-        });
+        // signaling_socket.on("whiteboardConfig", (serverResponse) => {
+        //     ConfigService.initFromServer(serverResponse);
+        //     // Inti whiteboard only when we have the config from the server
+        //     initWhiteboard();
+        // });
 
-        signaling_socket.on("whiteboardInfoUpdate", (info) => {
-            InfoService.updateInfoFromServer(info);
-            whiteboard.updateSmallestScreenResolution();
-        });
+        // signaling_socket.on("whiteboardInfoUpdate", (info) => {
+        //     InfoService.updateInfoFromServer(info);
+        //     whiteboard.updateSmallestScreenResolution();
+        // });
 
-        signaling_socket.on("drawToWhiteboard", function (content) {
-            whiteboard.handleEventsAndData(content, true);
-            InfoService.incrementNbMessagesReceived();
-        });
+        // signaling_socket.on("drawToWhiteboard", function (content) {
+        //     whiteboard.handleEventsAndData(content, true);
+        //     InfoService.incrementNbMessagesReceived();
+        // });
 
-        signaling_socket.on("refreshUserBadges", function () {
-            whiteboard.refreshUserBadges();
-        });
+        // signaling_socket.on("refreshUserBadges", function () {
+        //     whiteboard.refreshUserBadges();
+        // });
 
-        let accessDenied = false;
-        signaling_socket.on("wrongAccessToken", function () {
-            if (!accessDenied) {
-                accessDenied = true;
-                showBasicAlert("Access denied! Wrong accessToken!");
-            }
-        });
+        // let accessDenied = false;
+        // signaling_socket.on("wrongAccessToken", function () {
+        //     if (!accessDenied) {
+        //         accessDenied = true;
+        //         showBasicAlert("Access denied! Wrong accessToken!");
+        //     }
+        // });
 
-        signaling_socket.emit("joinWhiteboard", {
-            wid: whiteboardId,
-            at: accessToken,
-            windowWidthHeight: { w: $(window).width(), h: $(window).height() },
-        });
-    });
+        signaling_socket.send(
+            JSON.stringify({
+                type: "joinWhiteboard",
+                data: {
+                    wid: whiteboardId,
+                    at: accessToken,
+                    windowWidthHeight: { w: $(window).width(), h: $(window).height() },
+                },
+            })
+        );
+    };
+
+    signaling_socket.onmessage = function (event) {
+        console.log("received message: ", event.data);
+        const obj = JSON.parse(event.data);
+
+        switch (obj.type) {
+            case "whiteboardConfig":
+                {
+                    ConfigService.initFromServer(obj.data);
+                    // Inti whiteboard only when we have the config from the server
+                    initWhiteboard();
+                }
+                break;
+            case "whiteboardInfoUpdate":
+                {
+                    InfoService.updateInfoFromServer(obj.data);
+                    whiteboard.updateSmallestScreenResolution();
+                }
+                break;
+            case "drawToWhiteboard":
+                {
+                    whiteboard.handleEventsAndData(obj.data, true);
+                    InfoService.incrementNbMessagesReceived();
+                }
+                break;
+            case "refreshUserBadges":
+                {
+                    whiteboard.refreshUserBadges();
+                }
+                break;
+            case "wrongAccessToken":
+                {
+                    let accessDenied = false;
+
+                    if (!accessDenied) {
+                        accessDenied = true;
+                        showBasicAlert("Access denied! Wrong accessToken!");
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    };
 }
 
 function showBasicAlert(html, newOptions) {
@@ -161,7 +211,13 @@ function initWhiteboard() {
                 //     if (whiteboard.drawFlag) return;
                 // }
                 content["at"] = accessToken;
-                signaling_socket.emit("drawToWhiteboard", content);
+                // signaling_socket.emit("drawToWhiteboard", content);
+                signaling_socket.send(
+                    JSON.stringify({
+                        type: "drawToWhiteboard",
+                        data: content,
+                    })
+                );
                 InfoService.incrementNbMessagesSent();
             },
         });
@@ -174,10 +230,19 @@ function initWhiteboard() {
         );
 
         $(window).resize(function () {
-            signaling_socket.emit("updateScreenResolution", {
-                at: accessToken,
-                windowWidthHeight: { w: $(window).width(), h: $(window).height() },
-            });
+            // signaling_socket.emit("updateScreenResolution", {
+            //     at: accessToken,
+            //     windowWidthHeight: { w: $(window).width(), h: $(window).height() },
+            // });
+            signaling_socket.send(
+                JSON.stringify({
+                    type: "updateScreenResolution",
+                    data: {
+                        at: accessToken,
+                        windowWidthHeight: { w: $(window).width(), h: $(window).height() },
+                    },
+                })
+            );
         });
 
         /*----------------/

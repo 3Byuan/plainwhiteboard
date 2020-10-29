@@ -1,5 +1,9 @@
 const path = require("path");
 
+// third pure websocket library
+const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
+
 const config = require("./config/config");
 const ReadOnlyBackendService = require("./services/ReadOnlyBackendService");
 const WhiteboardInfoBackendService = require("./services/WhiteboardInfoBackendService");
@@ -22,9 +26,10 @@ function startBackendServer(port) {
     app.use(express.static(path.join(__dirname, "..", "dist")));
     app.use("/uploads", express.static(path.join(__dirname, "..", "public", "uploads")));
     var server = require("http").Server(app);
+    const wsServer = new WebSocket.Server({ server: server, path: "/ws-api" });
     server.listen(port);
-    var io = require("socket.io")(server, { path: "/ws-api" });
-    WhiteboardInfoBackendService.start(io);
+    // var io = require("socket.io")(server, { path: "/ws-api" });
+    WhiteboardInfoBackendService.start(wsServer);
 
     console.log("Webserver & socketserver running on port:" + port);
 
@@ -182,66 +187,120 @@ function startBackendServer(port) {
         }
     }
 
-    io.on("connection", function (socket) {
+    wsServer.on("connection", function connection(socket) {
+        socket.id = uuidv4();
         let whiteboardId = null;
-        socket.on("disconnect", function () {
+        socket.on("close", function () {
+            console.log("on close event fired");
             WhiteboardInfoBackendService.leave(socket.id, whiteboardId);
-            socket.compress(false).broadcast.to(whiteboardId).emit("refreshUserBadges", null); //Removes old user Badges
+            // socket.compress(false).broadcast.to(whiteboardId).emit("refreshUserBadges", null); //Removes old user Badges
+            // TODO: fix room id
+            wsServer.clients.forEach((client) => {
+                if (client !== socket && client.readyState === WebSocket.OPEN) {
+                    client.send(
+                        JSON.stringify({
+                            type: "refreshUserBadges",
+                        })
+                    );
+                }
+            });
         });
 
-        socket.on("drawToWhiteboard", function (content) {
-            if (!whiteboardId || ReadOnlyBackendService.isReadOnly(whiteboardId)) return;
-
-            content = escapeAllContentStrings(content);
-            if (accessToken === "" || accessToken == content["at"]) {
-                const broadcastTo = (wid) =>
-                    socket.compress(false).broadcast.to(wid).emit("drawToWhiteboard", content);
-                // broadcast to current whiteboard
-                broadcastTo(whiteboardId);
-                // broadcast the same content to the associated read-only whiteboard
-                const readOnlyId = ReadOnlyBackendService.getReadOnlyId(whiteboardId);
-                broadcastTo(readOnlyId);
-                s_whiteboard.handleEventsAndData(content); //save whiteboardchanges on the server
-            } else {
-                socket.emit("wrongAccessToken", true);
-            }
-        });
-
-        socket.on("joinWhiteboard", function (content) {
-            content = escapeAllContentStrings(content);
-            if (accessToken === "" || accessToken == content["at"]) {
-                whiteboardId = content["wid"];
-
-                socket.emit("whiteboardConfig", {
-                    common: config.frontend,
-                    whiteboardSpecific: {
-                        correspondingReadOnlyWid: ReadOnlyBackendService.getReadOnlyId(
-                            whiteboardId
-                        ),
-                        isReadOnly: ReadOnlyBackendService.isReadOnly(whiteboardId),
-                    },
-                });
-
-                socket.join(whiteboardId); //Joins room name=wid
-                const screenResolution = content["windowWidthHeight"];
-                WhiteboardInfoBackendService.join(socket.id, whiteboardId, screenResolution);
-            } else {
-                socket.emit("wrongAccessToken", true);
-            }
-        });
-
-        socket.on("updateScreenResolution", function (content) {
-            content = escapeAllContentStrings(content);
-            if (accessToken === "" || accessToken == content["at"]) {
-                const screenResolution = content["windowWidthHeight"];
-                WhiteboardInfoBackendService.setScreenResolution(
-                    socket.id,
-                    whiteboardId,
-                    screenResolution
-                );
+        socket.on("message", function incoming(event) {
+            console.log("on message event fired", event);
+            const obj = JSON.parse(event);
+            switch (obj.type) {
+                case "joinWhiteboard":
+                    joinWhiteboard(obj.data, socket);
+                    break;
+                case "drawToWhiteboard":
+                    drawToWhiteboard(obj.data, socket);
+                case "updateScreenResolution":
+                    updateScreenResolution(obj.data, socket);
+                default:
+                    break;
             }
         });
     });
+
+    function joinWhiteboard(content, socket) {
+        content = escapeAllContentStrings(content);
+        if (accessToken === "" || accessToken == content["at"]) {
+            whiteboardId = content["wid"];
+
+            socket.send(
+                JSON.stringify({
+                    type: "whiteboardConfig",
+                    data: {
+                        common: config.frontend,
+                        whiteboardSpecific: {
+                            correspondingReadOnlyWid: ReadOnlyBackendService.getReadOnlyId(
+                                whiteboardId
+                            ),
+                            isReadOnly: ReadOnlyBackendService.isReadOnly(whiteboardId),
+                        },
+                    },
+                })
+            );
+
+            // TODO: join maybe broken
+            // socket.join(whiteboardId); //Joins room name=wid
+            const screenResolution = content["windowWidthHeight"];
+            WhiteboardInfoBackendService.join(socket.id, whiteboardId, screenResolution);
+        } else {
+            // socket.emit("wrongAccessToken", true);
+            socket.send(
+                JSON.stringify({
+                    type: "wrongAccessToken",
+                })
+            );
+        }
+    }
+
+    function drawToWhiteboard(content, socket) {
+        if (!whiteboardId || ReadOnlyBackendService.isReadOnly(whiteboardId)) return;
+
+        content = escapeAllContentStrings(content);
+        if (accessToken === "" || accessToken == content["at"]) {
+            // const broadcastTo = (wid) =>
+            //     socket.compress(false).broadcast.to(wid).emit("drawToWhiteboard", content);
+            // // broadcast to current whiteboard
+            // broadcastTo(whiteboardId);
+            wsServer.clients.forEach((cli) => {
+                if (cli !== socket && cli.readyState === WebSocket.OPEN) {
+                    cli.send(
+                        JSON.stringify({
+                            type: "drawToWhiteboard",
+                            data: content,
+                        })
+                    );
+                }
+            }); // TODO: room id unimplemented.
+            // broadcast the same content to the associated read-only whiteboard
+            // const readOnlyId = ReadOnlyBackendService.getReadOnlyId(whiteboardId);
+            // broadcastTo(readOnlyId);
+            s_whiteboard.handleEventsAndData(content); //save whiteboardchanges on the server
+        } else {
+            // socket.emit("wrongAccessToken", true);
+            socket.send(
+                JSON.stringify({
+                    type: "wrongAccessToken",
+                })
+            );
+        }
+    }
+
+    function updateScreenResolution(content, socket) {
+        content = escapeAllContentStrings(content);
+        if (accessToken === "" || accessToken == content["at"]) {
+            const screenResolution = content["windowWidthHeight"];
+            WhiteboardInfoBackendService.setScreenResolution(
+                socket.id,
+                whiteboardId,
+                screenResolution
+            );
+        }
+    }
 
     //Prevent cross site scripting (xss)
     function escapeAllContentStrings(content, cnt) {

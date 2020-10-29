@@ -1,5 +1,6 @@
 const config = require("../config/config");
 const ReadOnlyBackendService = require("./ReadOnlyBackendService");
+const WebSocket = require("ws");
 
 /**
  * Class to hold information related to a whiteboard
@@ -146,18 +147,28 @@ class WhiteboardInfoBackendService {
             this.#infoByWhiteboard.forEach((info, readOnlyWhiteboardId) => {
                 if (info.shouldSendInfo()) {
                     // broadcast to editable whiteboard
-                    const wid = ReadOnlyBackendService.getIdFromReadOnlyId(readOnlyWhiteboardId);
-                    io.sockets
-                        .in(wid)
-                        .compress(false)
-                        .emit("whiteboardInfoUpdate", info.asObject());
+                    // const wid = ReadOnlyBackendService.getIdFromReadOnlyId(readOnlyWhiteboardId);
+                    // io.sockets
+                    //     .in(wid)
+                    //     .compress(false)
+                    //     .emit("whiteboardInfoUpdate", info.asObject());
 
-                    // also send to readonly whiteboard
-                    io.sockets
-                        .in(readOnlyWhiteboardId)
-                        .compress(false)
-                        .emit("whiteboardInfoUpdate", info.asObject());
+                    // // also send to readonly whiteboard
+                    // io.sockets
+                    //     .in(readOnlyWhiteboardId)
+                    //     .compress(false)
+                    //     .emit("whiteboardInfoUpdate", info.asObject());
 
+                    io.clients.forEach((cli) => {
+                        if (cli.readyState === WebSocket.OPEN) {
+                            cli.send(
+                                JSON.stringify({
+                                    type: "whiteboardInfoUpdate",
+                                    data: info.asObject(),
+                                })
+                            );
+                        }
+                    }); // TODO: fix room id
                     info.infoWasSent();
                 }
             });
